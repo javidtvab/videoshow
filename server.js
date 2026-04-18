@@ -3,8 +3,11 @@ const videoshow = require("./lib/videoshow");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
 
 const app = express();
+const upload = multer({ dest: "uploads/" });
+
 app.use(express.json({ limit: "50mb" }));
 
 const PORT = process.env.PORT || 3000;
@@ -28,16 +31,23 @@ app.get("/", (req, res) => {
   res.send("VideoShow API funcionando");
 });
 
-app.post("/create-video", async (req, res) => {
+app.post("/create-video", upload.single("audio"), async (req, res) => {
   try {
-    const { images, audioUrl, secondsPerImage = 5 } = req.body;
+    const imagesRaw = req.body.images;
+    const secondsPerImage = Number(req.body.secondsPerImage || 5);
 
-    if (!Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ error: "Falta el array images" });
+    if (!imagesRaw) {
+      return res.status(400).json({ error: "Falta images" });
     }
 
-    if (!audioUrl) {
-      return res.status(400).json({ error: "Falta audioUrl" });
+    if (!req.file) {
+      return res.status(400).json({ error: "Falta el archivo de audio" });
+    }
+
+    const images = JSON.parse(imagesRaw);
+
+    if (!Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ error: "images debe ser un array con URLs" });
     }
 
     const workDir = path.join(__dirname, "tmp", Date.now().toString());
@@ -54,7 +64,7 @@ app.post("/create-video", async (req, res) => {
     }
 
     const audioPath = path.join(workDir, "audio.mp3");
-    await downloadFile(audioUrl, audioPath);
+    fs.copyFileSync(req.file.path, audioPath);
 
     const outputPath = path.join(workDir, "video.mp4");
 
@@ -85,6 +95,7 @@ app.post("/create-video", async (req, res) => {
           }
         });
       });
+
   } catch (error) {
     console.error("Server error:", error);
     res.status(500).json({ error: "Error interno del servidor" });
