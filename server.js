@@ -1,5 +1,5 @@
 const express = require("express");
-const videoshow = require("./lib/videoshow");
+const videoshow = require("videoshow");
 console.log("VIDEOSHOW TYPE:", typeof videoshow);
 console.log("VIDEOSHOW KEYS:", videoshow && Object.keys(videoshow));
 const fs = require("fs");
