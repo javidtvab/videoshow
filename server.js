@@ -65,10 +65,17 @@ app.post("/create-video", upload.any(), async (req, res) => {
       .on("start", command => {
         console.log("FFmpeg command:", command);
       })
-      .on("error", err => {
+      .on("error", (err, stdout, stderr) => {
         console.error("VideoShow error:", err);
+        console.error("FFMPEG STDOUT:", stdout);
+        console.error("FFMPEG STDERR:", stderr);
+
         if (!res.headersSent) {
-          res.status(500).json({ error: "Error creando el vídeo" });
+          res.status(500).json({
+            error: "Error creando el vídeo",
+            details: err?.message || String(err),
+            stderr: stderr || null
+          });
         }
       })
       .on("end", () => {
@@ -81,7 +88,10 @@ app.post("/create-video", upload.any(), async (req, res) => {
 
   } catch (error) {
     console.error("Server error:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
+    res.status(500).json({
+      error: "Error interno del servidor",
+      details: error?.message || String(error)
+    });
   }
 });
 
