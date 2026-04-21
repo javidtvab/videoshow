@@ -1,5 +1,7 @@
 const express = require("express");
-const videoshow = require("videoshow");
+const videoshow = require("./lib/videoshow");
+console.log("VIDEOSHOW TYPE:", typeof videoshow);
+console.log("VIDEOSHOW KEYS:", videoshow && Object.keys(videoshow));
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
@@ -59,9 +61,14 @@ app.post("/create-video", upload.any(), async (req, res) => {
       pixelFormat: "yuv420p"
     };
 
-    videoshow(localImages, videoOptions)
-      .audio(audioFile.path)
-      .save(outputPath)
+const videoInstance = videoshow(localImages, videoOptions);
+
+console.log("VIDEO INSTANCE TYPE:", typeof videoInstance);
+console.log("VIDEO INSTANCE:", videoInstance);
+
+videoInstance
+  .audio(audioFile.path)
+  .save(outputPath)
       .on("start", command => {
         console.log("FFmpeg command:", command);
       })
