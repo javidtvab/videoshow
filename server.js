@@ -4,13 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 
-console.log("VIDEOSHOW TYPE:", typeof videoshow);
-console.log("VIDEOSHOW:", videoshow);
-
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
 const PORT = process.env.PORT || 3000;
+
+console.log("VIDEOSHOW TYPE:", typeof videoshow);
 
 app.get("/", (req, res) => {
   res.send("VideoShow API funcionando");
@@ -68,16 +67,19 @@ app.post("/create-video", upload.any(), async (req, res) => {
       pixelFormat: "yuv420p",
     };
 
-    const video = videoshow(localImages, videoOptions);
+    const videoInstance = videoshow(localImages, videoOptions);
 
-    console.log("VIDEO INSTANCE TYPE:", typeof video);
-    console.log("VIDEO INSTANCE:", video);
+    console.log("VIDEO INSTANCE TYPE:", typeof videoInstance);
 
-    if (!video) {
-      return res.status(500).json({ error: "videoshow() devolvió undefined" });
+    if (!videoInstance || typeof videoInstance.audio !== "function") {
+      return res.status(500).json({
+        error: "videoshow no devolvió una instancia válida",
+        videoshowType: typeof videoshow,
+        videoInstanceType: typeof videoInstance,
+      });
     }
 
-    video
+    videoInstance
       .audio(audioFile.path)
       .save(outputPath)
       .on("start", (command) => {
