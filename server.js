@@ -49,37 +49,37 @@ app.post("/create-video", upload.any(), async (req, res) => {
     fs.mkdirSync(workDir, { recursive: true });
 
     const outputPath = path.join(workDir, "video.mp4");
+    const listPath = path.join(workDir, "list.txt");
 
-    // Inputs FFmpeg
-    const args = ["-y"];
+    // Crear archivo concat para slideshow
+    let listContent = "";
 
     imageFiles.forEach((file) => {
-      args.push("-loop", "1", "-t", String(secondsPerImage), "-i", file.path);
+      const absolutePath = path.resolve(file.path);
+      listContent += `file '${absolutePath}'\n`;
+      listContent += `duration ${secondsPerImage}\n`;
     });
 
-    args.push("-i", audioFile.path);
+    // FFmpeg concat demuxer necesita repetir la última imagen
+    const lastImagePath = path.resolve(imageFiles[imageFiles.length - 1].path);
+    listContent += `file '${lastImagePath}'\n`;
 
-    // Filtros de vídeo
-    const videoFilters = imageFiles.map((_, index) => {
-      return `[${index}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1[v${index}]`;
-    });
+    fs.writeFileSync(listPath, listContent);
 
-    const concatInputs = imageFiles.map((_, index) => `[v${index}]`).join("");
-    const filterComplex = [
-      ...videoFilters,
-      `${concatInputs}concat=n=${imageFiles.length}:v=1:a=0[v]`,
-    ].join("; ");
-
-    args.push(
-      "-filter_complex", filterComplex,
-      "-map", "[v]",
-      "-map", `${imageFiles.length}:a`,
+    const args = [
+      "-y",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", listPath,
+      "-i", audioFile.path,
+      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+      "-r", "25",
       "-c:v", "libx264",
       "-pix_fmt", "yuv420p",
       "-c:a", "aac",
       "-shortest",
       outputPath
-    );
+    ];
 
     console.log("FFmpeg args:", args);
 
