@@ -1,18 +1,16 @@
 const express = require("express");
-const videoshow = require("./lib");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
+const { spawn } = require("child_process");
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
 const PORT = process.env.PORT || 3000;
 
-console.log("VIDEOSHOW TYPE:", typeof videoshow);
-
 app.get("/", (req, res) => {
-  res.send("VideoShow API funcionando");
+  res.send("FFmpeg API funcionando");
 });
 
 app.post("/create-video", upload.any(), async (req, res) => {
@@ -50,55 +48,65 @@ app.post("/create-video", upload.any(), async (req, res) => {
     const workDir = path.join(__dirname, "tmp", Date.now().toString());
     fs.mkdirSync(workDir, { recursive: true });
 
-    const localImages = imageFiles.map((file) => ({
-      path: file.path,
-      loop: secondsPerImage,
-    }));
-
     const outputPath = path.join(workDir, "video.mp4");
 
-    const videoOptions = {
-      fps: 25,
-      transition: false,
-      videoBitrate: 1024,
-      videoCodec: "libx264",
-      size: "1280x720",
-      format: "mp4",
-      pixelFormat: "yuv420p",
-    };
+    // Inputs FFmpeg
+    const args = ["-y"];
 
-    const videoInstance = videoshow(localImages, videoOptions);
+    imageFiles.forEach((file) => {
+      args.push("-loop", "1", "-t", String(secondsPerImage), "-i", file.path);
+    });
 
-    console.log("VIDEO INSTANCE TYPE:", typeof videoInstance);
+    args.push("-i", audioFile.path);
 
-    if (!videoInstance || typeof videoInstance.audio !== "function") {
-      return res.status(500).json({
-        error: "videoshow no devolvió una instancia válida",
-        videoshowType: typeof videoshow,
-        videoInstanceType: typeof videoInstance,
-      });
-    }
+    // Filtros de vídeo
+    const videoFilters = imageFiles.map((_, index) => {
+      return `[${index}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1[v${index}]`;
+    });
 
-    videoInstance
-      .audio(audioFile.path)
-      .save(outputPath)
-      .on("start", (command) => {
-        console.log("FFmpeg command:", command);
-        console.log("Received fields:", req.files.map((f) => f.fieldname));
-      })
-      .on("error", (err) => {
-        console.error("VideoShow error:", err);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Error creando el vídeo" });
-        }
-      })
-      .on("end", () => {
-        res.sendFile(outputPath, (err) => {
-          if (err) {
-            console.error("Send file error:", err);
-          }
+    const concatInputs = imageFiles.map((_, index) => `[v${index}]`).join("");
+    const filterComplex = [
+      ...videoFilters,
+      `${concatInputs}concat=n=${imageFiles.length}:v=1:a=0[v]`,
+    ].join("; ");
+
+    args.push(
+      "-filter_complex", filterComplex,
+      "-map", "[v]",
+      "-map", `${imageFiles.length}:a`,
+      "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-shortest",
+      outputPath
+    );
+
+    console.log("FFmpeg args:", args);
+
+    const ffmpeg = spawn("ffmpeg", args);
+
+    let stderr = "";
+
+    ffmpeg.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on("close", (code) => {
+      if (code !== 0) {
+        console.error("FFmpeg error:", stderr);
+        return res.status(500).json({
+          error: "Error creando el vídeo con ffmpeg",
+          details: stderr,
         });
+      }
+
+      res.sendFile(outputPath, (err) => {
+        if (err) {
+          console.error("Send file error:", err);
+        }
       });
+    });
+
   } catch (error) {
     console.error("Server error:", error);
     res.status(500).json({ error: "Error interno del servidor" });
