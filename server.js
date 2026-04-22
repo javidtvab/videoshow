@@ -1,8 +1,11 @@
 const express = require("express");
-const videoshow = require("./lib/videoshow");
+const videoshow = require("./lib");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
+
+console.log("VIDEOSHOW TYPE:", typeof videoshow);
+console.log("VIDEOSHOW:", videoshow);
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
@@ -21,7 +24,6 @@ app.post("/create-video", upload.any(), async (req, res) => {
       return res.status(400).json({ error: "No se han recibido archivos" });
     }
 
-    // Buscar el audio por nombre de campo
     const audioFile = req.files.find((file) => file.fieldname === "audio");
 
     if (!audioFile) {
@@ -31,7 +33,6 @@ app.post("/create-video", upload.any(), async (req, res) => {
       });
     }
 
-    // Buscar imágenes por nombre de campo image_1, image_2, etc.
     const imageFiles = req.files
       .filter((file) => /^image_\d+$/.test(file.fieldname))
       .sort((a, b) => {
@@ -67,15 +68,21 @@ app.post("/create-video", upload.any(), async (req, res) => {
       pixelFormat: "yuv420p",
     };
 
-    videoshow(localImages, videoOptions)
+    const video = videoshow(localImages, videoOptions);
+
+    console.log("VIDEO INSTANCE TYPE:", typeof video);
+    console.log("VIDEO INSTANCE:", video);
+
+    if (!video) {
+      return res.status(500).json({ error: "videoshow() devolvió undefined" });
+    }
+
+    video
       .audio(audioFile.path)
       .save(outputPath)
       .on("start", (command) => {
         console.log("FFmpeg command:", command);
-        console.log(
-          "Received fields:",
-          req.files.map((f) => f.fieldname)
-        );
+        console.log("Received fields:", req.files.map((f) => f.fieldname));
       })
       .on("error", (err) => {
         console.error("VideoShow error:", err);
