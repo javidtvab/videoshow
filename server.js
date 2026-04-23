@@ -92,6 +92,34 @@ function getAudioDuration(filePath) {
   });
 }
 
+// Recorta solo silencio FINAL.
+// Truco: invierte el audio, recorta silencio inicial, y vuelve a invertir.
+// Así evitamos cargarnos el comienzo de la locución.
+function trimTrailingSilence(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn("ffmpeg", [
+      "-y",
+      "-i", inputPath,
+      "-af",
+      "areverse,silenceremove=start_periods=1:start_duration=0.4:start_threshold=-45dB,areverse",
+      outputPath
+    ]);
+
+    let stderr = "";
+
+    ffmpeg.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(stderr || "Error recortando silencio final"));
+      }
+      resolve();
+    });
+  });
+}
+
 app.get("/", (req, res) => {
   res.send("FFmpeg API funcionando");
 });
@@ -131,11 +159,33 @@ app.post("/create-video", async (req, res) => {
     const audioPath = path.join(workDir, "audio.mp3");
     await downloadFile(audioUrl, audioPath);
 
-    const audioDuration = await getAudioDuration(audioPath);
+    const originalDuration = await getAudioDuration(audioPath);
+
+    // Crear audio recortado solo de silencio final
+    const trimmedAudioPath = path.join(workDir, "audio_trimmed.mp3");
+    let audioForVideo = audioPath;
+    let effectiveDuration = originalDuration;
+
+    try {
+      await trimTrailingSilence(audioPath, trimmedAudioPath);
+      const trimmedDuration = await getAudioDuration(trimmedAudioPath);
+
+      // Solo usar el recortado si tiene sentido y no se ha quedado absurdo
+      if (
+        trimmedDuration > 1 &&
+        trimmedDuration < originalDuration &&
+        trimmedDuration > originalDuration * 0.5
+      ) {
+        audioForVideo = trimmedAudioPath;
+        effectiveDuration = trimmedDuration;
+      }
+    } catch (e) {
+      console.warn("No se pudo recortar silencio final, uso audio original:", e.message);
+    }
 
     // Si no se manda secondsPerImage o viene 0, calcularlo automáticamente
-    // Restamos 1 segundo de margen para que no se alargue de más al final
-    const safeDuration = Math.max(1, audioDuration - 1);
+    // Restamos 0.5 s de margen para no pasarnos al final
+    const safeDuration = Math.max(1, effectiveDuration - 0.5);
 
     if (!secondsPerImage || secondsPerImage <= 0) {
       secondsPerImage = safeDuration / localImagePaths.length;
@@ -160,8 +210,9 @@ app.post("/create-video", async (req, res) => {
       "-f", "concat",
       "-safe", "0",
       "-i", listPath,
-      "-i", audioPath,
-      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+      "-i", audioForVideo,
+      "-vf",
+      "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
       "-r", "25",
       "-c:v", "libx264",
       "-pix_fmt", "yuv420p",
@@ -170,6 +221,9 @@ app.post("/create-video", async (req, res) => {
       outputPath
     ];
 
+    console.log("Original audio duration:", originalDuration);
+    console.log("Effective audio duration:", effectiveDuration);
+    console.log("Seconds per image:", secondsPerImage);
     console.log("FFmpeg args:", args);
 
     const ffmpeg = spawn("ffmpeg", args);
@@ -194,7 +248,6 @@ app.post("/create-video", async (req, res) => {
 
       res.sendFile(outputPath);
     });
-
   } catch (error) {
     console.error("Server error:", error);
     res.status(500).json({
