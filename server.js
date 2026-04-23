@@ -43,8 +43,8 @@ app.get("/", (req, res) => {
 
 app.post("/create-video", async (req, res) => {
   try {
-    const { audioUrl } = req.body;
-const secondsPerImage = Number(req.body.secondsPerImage || 5);
+const { audioUrl } = req.body;
+let secondsPerImage = Number(req.body.secondsPerImage || 0);
 
 let images = req.body.images;
 
@@ -76,7 +76,49 @@ if (!Array.isArray(images) || images.length === 0) {
 
     const audioPath = path.join(workDir, "audio.mp3");
     await downloadFile(audioUrl, audioPath);
+// Obtener duración real del audio con ffprobe
+const getAudioDuration = (filePath) => {
+  return new Promise((resolve, reject) => {
+    const probe = spawn("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      filePath
+    ]);
 
+    let output = "";
+    let error = "";
+
+    probe.stdout.on("data", (data) => {
+      output += data.toString();
+    });
+
+    probe.stderr.on("data", (data) => {
+      error += data.toString();
+    });
+
+    probe.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(error || "ffprobe error"));
+      }
+
+      const duration = parseFloat(output.trim());
+
+      if (!duration || isNaN(duration)) {
+        return reject(new Error("No se pudo calcular la duración del audio"));
+      }
+
+      resolve(duration);
+    });
+  });
+};
+
+const audioDuration = await getAudioDuration(audioPath);
+
+// Si no se manda secondsPerImage o viene 0, calcularlo automáticamente
+if (!secondsPerImage || secondsPerImage <= 0) {
+  secondsPerImage = audioDuration / localImagePaths.length;
+}
     const listPath = path.join(workDir, "list.txt");
     const outputPath = path.join(workDir, "video.mp4");
 
