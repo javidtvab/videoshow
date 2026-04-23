@@ -76,8 +76,7 @@ if (!Array.isArray(images) || images.length === 0) {
 
     const audioPath = path.join(workDir, "audio.mp3");
     await downloadFile(audioUrl, audioPath);
-// Obtener duración real del audio con ffprobe
-const getAudioDuration = (filePath) => {
+    const getAudioDuration = (filePath) => {
   return new Promise((resolve, reject) => {
     const probe = spawn("ffprobe", [
       "-v", "error",
@@ -113,7 +112,33 @@ const getAudioDuration = (filePath) => {
   });
 };
 
-const audioDuration = await getAudioDuration(audioPath);
+const trimAudioSilence = (inputPath, outputPath) => {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn("ffmpeg", [
+      "-y",
+      "-i", inputPath,
+      "-af", "silenceremove=start_periods=1:start_silence=0.3:start_threshold=-40dB:stop_periods=1:stop_silence=0.5:stop_threshold=-40dB",
+      outputPath
+    ]);
+
+    let stderr = "";
+
+    ffmpeg.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(stderr || "Error recortando silencios"));
+      }
+      resolve();
+    });
+  });
+};
+const trimmedAudioPath = path.join(workDir, "audio_trimmed.mp3");
+await trimAudioSilence(audioPath, trimmedAudioPath);
+
+const audioDuration = await getAudioDuration(trimmedAudioPath);
 
 // Si no se manda secondsPerImage o viene 0, calcularlo automáticamente
 if (!secondsPerImage || secondsPerImage <= 0) {
@@ -136,7 +161,7 @@ if (!secondsPerImage || secondsPerImage <= 0) {
       "-f", "concat",
       "-safe", "0",
       "-i", listPath,
-      "-i", audioPath,
+      "-i", trimmedAudioPath,
       "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
       "-r", "25",
       "-c:v", "libx264",
