@@ -71,22 +71,25 @@ function getAudioDuration(filePath) {
 
     probe.on("close", (code) => {
       if (code !== 0) return reject(new Error(error || "ffprobe error"));
+
       const duration = parseFloat(output.trim());
       if (!duration || isNaN(duration)) {
         return reject(new Error("No se pudo calcular la duración del audio"));
       }
+
       resolve(duration);
     });
   });
 }
 
-// Convierte MP3 -> WAV y recorta SOLO silencio final
+// Convierte a WAV y recorta silencio FINAL de forma agresiva
 function convertAndTrimAudio(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
       "-y",
       "-i", inputPath,
-      "-af", "silenceremove=stop_periods=-1:stop_duration=0.5:stop_threshold=-45dB",
+      "-af",
+      "silenceremove=stop_periods=1:stop_duration=0.25:stop_threshold=-30dB:stop_silence=0:detection=rms:window=0.05",
       "-ar", "44100",
       "-ac", "2",
       outputPath
@@ -99,7 +102,9 @@ function convertAndTrimAudio(inputPath, outputPath) {
     });
 
     ffmpeg.on("close", (code) => {
-      if (code !== 0) return reject(new Error(stderr || "Error recortando audio"));
+      if (code !== 0) {
+        return reject(new Error(stderr || "Error recortando audio"));
+      }
       resolve();
     });
   });
@@ -144,10 +149,28 @@ app.post("/create-video", async (req, res) => {
     const audioMp3Path = path.join(workDir, "audio.mp3");
     await downloadFile(audioUrl, audioMp3Path);
 
-    const audioWavPath = path.join(workDir, "audio_trimmed.wav");
-    await convertAndTrimAudio(audioMp3Path, audioWavPath);
+    const originalDuration = await getAudioDuration(audioMp3Path);
 
-    const effectiveDuration = await getAudioDuration(audioWavPath);
+    const audioWavPath = path.join(workDir, "audio_trimmed.wav");
+    let audioForVideo = audioMp3Path;
+    let effectiveDuration = originalDuration;
+
+    try {
+      await convertAndTrimAudio(audioMp3Path, audioWavPath);
+      const trimmedDuration = await getAudioDuration(audioWavPath);
+
+      // Solo usar el recortado si de verdad ha recortado algo y no destroza el audio
+      if (
+        trimmedDuration > 1 &&
+        trimmedDuration < originalDuration &&
+        trimmedDuration > originalDuration * 0.4
+      ) {
+        audioForVideo = audioWavPath;
+        effectiveDuration = trimmedDuration;
+      }
+    } catch (e) {
+      console.warn("No se pudo recortar silencio final, uso audio original:", e.message);
+    }
 
     if (!secondsPerImage || secondsPerImage <= 0) {
       secondsPerImage = Math.max(1, effectiveDuration / localImagePaths.length);
@@ -170,7 +193,7 @@ app.post("/create-video", async (req, res) => {
       "-f", "concat",
       "-safe", "0",
       "-i", listPath,
-      "-i", audioWavPath,
+      "-i", audioForVideo,
       "-vf",
       "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
       "-r", "25",
@@ -181,6 +204,7 @@ app.post("/create-video", async (req, res) => {
       outputPath
     ];
 
+    console.log("Original audio duration:", originalDuration);
     console.log("Effective audio duration:", effectiveDuration);
     console.log("Seconds per image:", secondsPerImage);
 
