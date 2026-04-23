@@ -43,11 +43,22 @@ app.get("/", (req, res) => {
 
 app.post("/create-video", async (req, res) => {
   try {
-    const { images, audioUrl, secondsPerImage = 5 } = req.body;
+    const { audioUrl } = req.body;
+const secondsPerImage = Number(req.body.secondsPerImage || 5);
 
-    if (!Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ error: "images debe ser un array con URLs" });
-    }
+let images = req.body.images;
+
+if (typeof images === "string") {
+  try {
+    images = JSON.parse(images);
+  } catch (e) {
+    return res.status(400).json({ error: "images no es JSON válido" });
+  }
+}
+
+if (!Array.isArray(images) || images.length === 0) {
+  return res.status(400).json({ error: "images debe ser un array con URLs" });
+}
 
     if (!audioUrl) {
       return res.status(400).json({ error: "Falta audioUrl" });
