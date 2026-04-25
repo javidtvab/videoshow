@@ -151,7 +151,7 @@ app.post("/create-video", async (req, res) => {
       "-i", listPath,
       "-i", audioPath,
       "-vf",
-      "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+      "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
       "-r", "25",
       "-c:v", "libx264",
       "-pix_fmt", "yuv420p",
