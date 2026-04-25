@@ -6,7 +6,7 @@ const https = require("https");
 const http = require("http");
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "20mb" }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -15,38 +15,43 @@ function downloadFile(url, dest) {
     const client = url.startsWith("https") ? https : http;
     const file = fs.createWriteStream(dest);
 
-    client.get(url, (response) => {
-      if (
-        response.statusCode >= 300 &&
-        response.statusCode < 400 &&
-        response.headers.location
-      ) {
-        file.close();
-        fs.unlink(dest, () => {
-          downloadFile(response.headers.location, dest).then(resolve).catch(reject);
+    client
+      .get(url, (response) => {
+        if (
+          response.statusCode >= 300 &&
+          response.statusCode < 400 &&
+          response.headers.location
+        ) {
+          file.close();
+          fs.unlink(dest, () => {
+            downloadFile(response.headers.location, dest)
+              .then(resolve)
+              .catch(reject);
+          });
+          return;
+        }
+
+        if (response.statusCode !== 200) {
+          file.close();
+          fs.unlink(dest, () => {
+            reject(new Error(`Error descargando ${url}: ${response.statusCode}`));
+          });
+          return;
+        }
+
+        response.pipe(file);
+
+        file.on("finish", () => file.close(resolve));
+
+        file.on("error", (err) => {
+          file.close();
+          fs.unlink(dest, () => reject(err));
         });
-        return;
-      }
-
-      if (response.statusCode !== 200) {
-        file.close();
-        fs.unlink(dest, () => {
-          reject(new Error(`Error descargando ${url}: ${response.statusCode}`));
-        });
-        return;
-      }
-
-      response.pipe(file);
-
-      file.on("finish", () => file.close(resolve));
-      file.on("error", (err) => {
+      })
+      .on("error", (err) => {
         file.close();
         fs.unlink(dest, () => reject(err));
       });
-    }).on("error", (err) => {
-      file.close();
-      fs.unlink(dest, () => reject(err));
-    });
   });
 }
 
@@ -56,7 +61,7 @@ function getAudioDuration(filePath) {
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",
-      filePath
+      filePath,
     ]);
 
     let output = "";
@@ -71,9 +76,12 @@ function getAudioDuration(filePath) {
     });
 
     probe.on("close", (code) => {
-      if (code !== 0) return reject(new Error(error || "ffprobe error"));
+      if (code !== 0) {
+        return reject(new Error(error || "ffprobe error"));
+      }
 
       const duration = parseFloat(output.trim());
+
       if (!duration || isNaN(duration)) {
         return reject(new Error("No se pudo calcular la duración del audio"));
       }
@@ -90,8 +98,8 @@ app.get("/", (req, res) => {
 app.post("/create-video", async (req, res) => {
   try {
     const { audioUrl } = req.body;
-    let secondsPerImage = Number(req.body.secondsPerImage || 0);
     let images = req.body.images;
+    let secondsPerImage = Number(req.body.secondsPerImage || 0);
 
     if (typeof images === "string") {
       try {
@@ -113,6 +121,7 @@ app.post("/create-video", async (req, res) => {
     fs.mkdirSync(workDir, { recursive: true });
 
     const localImagePaths = [];
+
     for (let i = 0; i < images.length; i++) {
       const imagePath = path.join(workDir, `image_${i + 1}.png`);
       await downloadFile(images[i], imagePath);
@@ -125,7 +134,7 @@ app.post("/create-video", async (req, res) => {
     const audioDuration = await getAudioDuration(audioPath);
 
     if (!secondsPerImage || secondsPerImage <= 0) {
-      secondsPerImage = Math.max(1, audioDuration / localImagePaths.length);
+      secondsPerImage = audioDuration / localImagePaths.length;
     }
 
     const listPath = path.join(workDir, "list.txt");
@@ -133,61 +142,84 @@ app.post("/create-video", async (req, res) => {
 
     let listContent = "";
 
-    // Todas menos la última: file + duration
-    for (let i = 0; i < localImagePaths.length - 1; i++) {
-      listContent += `file '${localImagePaths[i]}'\n`;
+    // Dar duración a TODAS las imágenes
+    for (const imgPath of localImagePaths) {
+      listContent += `file '${imgPath}'\n`;
       listContent += `duration ${secondsPerImage}\n`;
     }
 
-    // Última: solo file
+    // Repetir la última imagen para que FFmpeg respete su duración
     listContent += `file '${localImagePaths[localImagePaths.length - 1]}'\n`;
 
     fs.writeFileSync(listPath, listContent);
 
     const args = [
       "-y",
+
       "-f", "concat",
       "-safe", "0",
       "-i", listPath,
+
       "-i", audioPath,
+
+      "-t", String(audioDuration),
+
       "-vf",
       "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+
       "-r", "25",
+
       "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "25",
+      "-tune", "stillimage",
       "-pix_fmt", "yuv420p",
+
       "-c:a", "aac",
-      "-shortest",
-      outputPath
+      "-b:a", "128k",
+
+      "-movflags", "+faststart",
+
+      outputPath,
     ];
 
+    console.log("Image count:", localImagePaths.length);
     console.log("Audio duration:", audioDuration);
     console.log("Seconds per image:", secondsPerImage);
-    console.log("Image count:", localImagePaths.length);
+    console.log("FFmpeg args:", args.join(" "));
 
     const ffmpeg = spawn("ffmpeg", args);
 
     let stderr = "";
+
     ffmpeg.stderr.on("data", (data) => {
       stderr += data.toString();
     });
 
-    ffmpeg.on("close", (code) => {
+    ffmpeg.on("close", (code, signal) => {
       if (code !== 0) {
+        console.error("FFmpeg failed. Code:", code, "Signal:", signal);
+        console.error(stderr);
+
         return res.status(500).json({
           error: "Error creando el vídeo con ffmpeg",
-          details: stderr
+          code,
+          signal,
+          details: stderr.slice(-5000),
         });
       }
 
       res.setHeader("Content-Type", "video/mp4");
       res.setHeader("Content-Disposition", "attachment; filename=video.mp4");
+
       res.sendFile(outputPath);
     });
   } catch (error) {
     console.error("Server error:", error);
+
     res.status(500).json({
       error: "Error interno del servidor",
-      details: error.message
+      details: error.message,
     });
   }
 });
